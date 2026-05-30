@@ -33,40 +33,51 @@ open-weight model on LM Studio is **weaker at tool-calling than Gemini/Claude/GP
 design favors *deterministic orchestration with bounded LLM decisions inside*. The third
 follows from the product being a CI/CD tool other people self-host.
 
-1. **Orchestration backbone = `LoopAgent` + Skills, NOT routing/delegation.** Each agent in
-   the team (QA, triage, coding) is a single-goal worker with one goal and one trace — nothing
-   to route between at the agent level. Routing (`sub_agents` transfer / `AgentTool`
-   coordinators) is the pattern *most* sensitive to weak tool-calling (every hop is another
-   dice roll; 95% per-call over 8 steps ≈ 66% success), and `transfer_to_agent` hands control
-   *out* of the governed loop. The Skills layer provides the specialization routing would —
-   load the right SKILL.md into one worker, without multi-agent's ~15× token overhead or split
-   traces. → Each agent is a `LoopAgent` + single `LlmAgent`. Push specialization into SKILL.md
-   bundles. Do **not** add `sub_agents`/`AgentTool`. There is **no "manager agent"** — the
-   pipeline (Jenkins) coordinates the agents; the agents never coordinate each other. Graduate
-   an individual agent to a **graph workflow** (Phase 6.5) only when its phase logic outgrows
-   one loop.
-   → *Validated against ADK's workflow taxonomy (adk.dev/workflows):* the LoopAgent is ADK's
-   **Template workflow (Loop)** — a first-class, fully-supported construct, not a legacy fallback.
-   The predictability/reliability/structure benefits ADK attributes to multi-element workflows we
-   get from the **Jenkins** skeleton wrapping the loop (the workflow structure is split across two
-   layers: Jenkins = pipeline graph, LoopAgent = agent step). ADK's **Collaborative workflow**
-   ("a single agent acts as dynamic coordinator with sub-agents") is precisely the manager/routing
-   pattern this decision rejects, and ADK still flags **Agent Routing as experimental** — both
-   reconfirm the no-routing stance. **Graph workflow is ADK's documented *successor* to template
-   workflows**, not a competitor — so Phase 6.5 is a blessed migration path, not a fork.
+1. **Orchestration backbone = ADK 2.x Workflow Runtime (the graph engine), NOT routing/delegation
+   and NOT the deprecated `LoopAgent`.** Each agent in the team (QA, triage, coding) is a single-goal
+   worker with one goal and one trace — nothing to route between at the agent level. Routing
+   (`sub_agents` transfer / `AgentTool` coordinators / the new Task-API & Collaborative layer) is the
+   pattern *most* sensitive to weak tool-calling (every hop is another dice roll; 95% per-call over 8
+   steps ≈ 66% success) and hands control *out* of the governed flow. The Skills layer provides the
+   specialization routing would — load the right SKILL.md into one worker, without multi-agent's ~15×
+   token overhead or split traces.
+   → **The worker is a single (non-deprecated) `LlmAgent`** (tools + Skills; its own inner
+   reason→tool→observe loop). The **bounded outer iteration** — the old `LoopAgent`'s job (a hard cap
+   + clean `finish()`/escalate termination) — is expressed as an **ADK *dynamic workflow*: a plain-
+   Python iterative loop** (`while step < budget and not finished: await ctx.run_node(worker)`), which
+   is ADK's documented pattern for iterative-refinement loops and gives **automatic checkpointing/
+   resume** for free. Push specialization into SKILL.md bundles. Do **not** add `sub_agents`/
+   `AgentTool` or adopt the **Task API / Collaborative / inter-agent-routing** layer (that *is* the
+   manager pattern). There is **no "manager agent"** — Jenkins coordinates the agents; the agents
+   never coordinate each other.
+   → *Why not `LoopAgent`:* it is **deprecated in ADK 2.0** and emits a removal warning (the template
+   workflow agents Sequential/Parallel/Loop are superseded by the graph engine; the per-class doc
+   pages lag the runtime warning, so trust the warning, not the page). Building net-new on it is
+   guaranteed migration debt. The graph engine is **model-agnostic** (routers are plain Python
+   functions returning `Event(route=...)`, no Gemini/LLM classifier) and a single-turn `LlmAgent` leaf
+   is execution-optimized, so we lose nothing by skipping the template wrapper.
+   → *When phases branch (Phase 6.5):* graduate the dynamic loop to a **static graph `Workflow`** —
+   explicit nodes + code routers (`edges=[("START", worker, router), (router, {...})]`) + `JoinNode`
+   for fan-in — only when the phase logic (research→plan→execute→verify) outgrows one loop. Same
+   engine, more expressive shape; the worker and tools/skills carry over unchanged. ADK still flags
+   stand-alone **Agent Routing as experimental** — keep routing in deterministic code routers.
 
-2. **ADK version = pin `google-adk~=2.1` now.** 2.0 went GA 2026-05-19; 2.1 followed 4 days
-   later. The new graph/collaborative workflow engine is explicitly **model-agnostic** (graph
-   routing uses plain Python router functions — no Gemini, no LLM classifier required), and
-   every piece of this stack — LiteLLM, McpToolset, SkillToolset, Plugins,
-   DatabaseSessionService, OpenTelemetry, `adk eval`, `adk optimize`, Visual Builder — is
-   supported on 2.x. The 1.x template agents (`LoopAgent` etc.) are "superseded" but fully
-   supported; `BaseAgent` is now a graph node, so today's loop carries forward unchanged.
-   The Gemini-only restrictions (Live API voice, built-in `google_search`, Gemini code-exec)
-   are all features this plan doesn't use. Starting on 2.x means no migration later.
-   → Migration hygiene: keep JSON-blob session storage (Event schema gained fields), avoid
-   `_run_async_impl()` overrides (silently ignored by the graph engine — use callbacks), and
-   don't broadly `except Exception:` inside tools (it swallows the engine's retry/HITL signals).
+2. **ADK version = pin `google-adk~=2.1` now.** 2.0 went GA 2026-05-19; 2.1 followed 4 days later. The
+   Workflow Runtime (graph engine) is the headline of 2.0 and where all current hardening is going; it
+   is **model-agnostic**, and every piece of this stack — LiteLLM, McpToolset, SkillToolset, Plugins,
+   DatabaseSessionService, OpenTelemetry, `adk eval`, `adk optimize` — is supported on 2.x. The
+   Gemini-only restrictions (Live API voice, built-in `google_search`, Gemini code-exec) are all
+   features this plan doesn't use. We build on the graph engine from day one (see decision 1), so the
+   1.x template agents' deprecation never touches us, and there is **no migration later**. The pin
+   `~=2.1` also blocks 3.0 (the likely removal point for the deprecated template agents) — a safety
+   margin we don't actually need, since we never use them.
+   → **Engine hygiene (these are graph-engine requirements, not style):** keep JSON-blob session
+   storage (the Event schema gained `node_info`/`output`); **never override `_run_async_impl()`** (the
+   graph engine ignores it — use callbacks/nodes); **never append events to the session directly and
+   never call `enqueue_event`** — *yield* events from the node so the framework manages persistence/
+   routing/streaming (appending circumvents the engine and breaks determinism); and **don't broadly
+   `except Exception:` inside tools** — the engine now auto-catches exceptions to drive retries,
+   telemetry, and HITL pauses, so swallowing them disables those signals.
 
 3. **Product shape = self-hosted, repo-agnostic engine.** The agent team is a **generic
    engine**; everything repo-specific lives in config the user/repo carries, never in the
@@ -84,7 +95,7 @@ The whole system runs in Docker as a **compose stack** — control-plane contain
 per-run workload container, a Squid egress proxy, an observability container, plus the
 CI/CD services (Jenkins, SonarQube, Trivy) added in Phase 9. Two boundaries serve two threats:
 
-- **Control-plane container** (trusted): the agent harness(es), LoopAgent + worker,
+- **Control-plane container** (trusted): the agent harness(es), the graph-workflow runner + worker,
   governance Plugin, budgets, audit, capabilities loader, and the **model endpoint/secrets**.
   The only container that talks to the model.
 - **Workload container** (untrusted, disposable, **per run**): where `run_shell` / `Execute`,
@@ -147,9 +158,12 @@ will execute in.
 **Steps**
 1. Drop in the `SandboxSession` (persistent workload container) + tools:
    `run_shell`, `write_file`, `read_file`, `copy_out`, `finish`.
-2. Wrap the worker in a `LoopAgent` with `max_iterations` + `finish()` escalation — the
-   **settled orchestration backbone**: pure Python, model-agnostic, terminates on `escalate`
-   or `max_iterations`. No `sub_agents`/routing — specialization comes from Skills (Phase 1.5).
+2. Drive the worker (a single `LlmAgent`) with an **ADK dynamic-workflow loop** — a plain-Python
+   iteration (`while step < budget and not finished: await ctx.run_node(worker)`) that terminates on
+   `finish()`/escalate or the step budget. This is the **settled orchestration backbone** (decision 1):
+   model-agnostic, deterministic, and the documented replacement for the deprecated `LoopAgent` — with
+   automatic checkpointing/resume for free. No `sub_agents`/routing/Task-API — specialization comes
+   from Skills (Phase 1.5). (Keep the `LlmAgent` in single-turn/task mode so it composes as a node.)
 3. Add the `before_tool_callback` guard: step budget, time budget, denylist.
 4. Add native tool generators where useful: `OpenAPIToolset` (any OpenAPI 3.x spec) and
    `McpToolset` (any MCP server) — both zero per-tool code.
@@ -196,7 +210,8 @@ verbs), **Skills = capability packaging** (how/when to use them).
 - *Skills are the alternative to routing.* The specialization a multi-agent design gets from
   routing to specialists, this design gets from loading the right SKILL.md into one worker —
   one trace, one governance surface, one budget. This is *why* each agent stays a single
-  LoopAgent, and why the CI/CD "team" is single-purpose agents + skills, not a manager hierarchy.
+  worker (one `LlmAgent` in a dynamic-workflow loop), and why the CI/CD "team" is single-purpose
+  agents + skills, not a manager hierarchy.
 
 **Steps**
 1. Create a small `mcp_registry.py` (or a YAML the loader reads): one entry per MCP server,
@@ -504,42 +519,45 @@ in-flight cap (which must track *model* capacity, not container count).
 
 ---
 
-## Phase 6.5 — Graph-workflow migration (advanced; only when a loop outgrows itself)
-**Objective:** replace a single `LoopAgent` skeleton with an ADK 2.x **graph workflow** once an
-agent's logic is too tangled for one loop with a step-budget guard, or it needs parallel
-sub-investigations or resumable long runs. (A likely candidate: the coding agent's
-read → plan → patch → test → revise cycle.)
+## Phase 6.5 — Static graph workflow (advanced; only when a loop outgrows itself)
+**Objective:** graduate an agent from the **dynamic-workflow loop** (the day-one backbone — a Python
+iteration over one `LlmAgent` worker, see decision 1 & Phase 1) to a **static graph `Workflow`** once
+its logic is too tangled for one loop — i.e. it needs explicit *branching* between distinct phases,
+parallel sub-investigations (fan-out/fan-in), or a debuggable phase graph. (A likely candidate: the
+coding agent's read → plan → patch → test → revise cycle, once the branches multiply.)
 
-**Why its own phase:** the `LoopAgent` is deliberately the backbone through Phase 6. Graph
-workflows are the *natural successor* — explicit nodes/edges, conditional routing via **plain
-Python router functions** (no LLM classifier, no Gemini), cycles, `JoinNode` fan-in, framework
-`RetryConfig`, checkpoint/resume. Same deterministic-skeleton-with-LLM-inside shape, more
-expressive.
+**Why its own phase (not earlier):** we already build on the graph engine from Phase 1 — so this is
+**not a migration off a deprecated primitive** (we never used `LoopAgent`) and **not an engine swap**.
+It's promoting one *shape* of graph workflow (a dynamic Python loop) to another *shape* (a static
+node/edge graph) **within the same Workflow Runtime**, when branching makes the static form clearer.
+The dynamic loop already gives checkpoint/resume; the static graph adds explicit nodes/edges,
+conditional routing via **plain Python router functions**, `JoinNode` fan-in, and per-node
+`RetryConfig` — the same deterministic-skeleton-with-LLM-inside shape, just more legible when phases
+branch. Stay on the dynamic loop while the logic is still loop-shaped; many agents never need this.
 
 **Steps**
-1. Lift the loop into a graph: each phase a node; the `LlmAgent` worker and all tools/skills
-   carry over unchanged (a refactor of the *container*, not a rewrite). `BaseAgent` is already a
-   graph node in 2.x.
+1. Lift the loop into a static graph: each phase a node; the `LlmAgent` worker and all tools/skills
+   carry over unchanged (a refactor of the *shape*, not a rewrite). Wire with
+   `Workflow(edges=[("START", worker, router), (router, {"ROUTE": next_node, ...})])`.
 2. Express transitions as **code routers** (`def router(node_input) -> Event(route=...)`), not
-   `RoutedAgent` (experimental) and not `transfer_to_agent`.
+   stand-alone **Agent Routing** (experimental) and not `transfer_to_agent`/Task-API delegation.
 3. Add `RetryConfig` per node; add a `JoinNode` only for provably breadth-first work.
 4. Use the Web UI **Graph View** to debug visually.
-5. **Native model-free HITL (only available here).** Graph workflows can include human-in-the-loop
-   nodes via `RequestInput(message=..., payload=..., response_schema=...)` (ADK 2.0+), which pause
-   the graph for a human and **require no model** — matching the "no LLM in control flow" principle.
-   This is the right tool for a human checkpoint *internal to an agent's reasoning* (e.g. "I've
-   drafted a risky migration — confirm before I continue"). **It is NOT for the Phase-9 pipeline
-   gates** (those stay in Jenkins/async — see the Phase-9 HITL-placement note): a `RequestInput`
-   pause holds the agent run (model slot + workload container) open while waiting, which is exactly
-   what the single-LM-Studio concurrency cap can't afford. Pairs with **Resume Agents** (checkpoint/
-   resume). `RequestInput` is unavailable to a `LoopAgent` — it exists only once an agent is a graph,
-   which is itself why it lands in this phase, not earlier.
+5. **Native model-free HITL.** Graph workflows can include human-in-the-loop nodes via
+   `RequestInput(message=..., payload=..., response_schema=...)` (ADK 2.x), which pause the graph for a
+   human and **require no model** — matching the "no LLM in control flow" principle. This is the right
+   tool for a human checkpoint *internal to an agent's reasoning* (e.g. "I've drafted a risky migration
+   — confirm before I continue"). **It is NOT for the Phase-9 pipeline gates** (those stay in
+   Jenkins/async — see the Phase-9 HITL-placement note): a `RequestInput` pause holds the agent run
+   (model slot + workload container) open while waiting, which the single-LM-Studio concurrency cap
+   can't afford. Pairs with **Resume Agents** (checkpoint/resume).
 
 **Bands:** Build (orchestration), with Scale (resume) + Govern (per-node retry/HITL) benefits.
 **Low-code surface:** node/edge wiring + Python router functions; `RetryConfig`.
-**Done when:** the workflow runs as a graph with conditional transitions, the governance Plugin
+**Done when:** the workflow runs as a static graph with conditional transitions, the governance Plugin
 still fires on every node, and a long run can checkpoint/resume.
-**Avoid:** `RoutedAgent` and LLM-classifier routing until Google drops the experimental label.
+**Avoid:** stand-alone Agent Routing and LLM-classifier routing until Google drops the experimental
+label.
 **Optional (durability, demand-driven):** if long runs die mid-task and lose work, **Dapr**
 (CNCF, self-hosted sidecar, fully local) adds durable, crash-recoverable execution. Add only if
 you hit this; don't take the dependency speculatively. (Temporal/Restate/DBOS are open-core with
@@ -570,7 +588,8 @@ the global cap queue in the broker; and a threshold breach halts a run.
 is custom code (the last box a paid platform fills for you).
 
 **Concurrency model (settled — state it explicitly; it's currently only implied).** An "agent" is
-a **definition** (a LoopAgent + a skill + a model config), **not a long-lived worker/singleton**.
+a **definition** (an `LlmAgent` worker in a dynamic-workflow loop + a skill + a model config), **not a
+long-lived worker/singleton**.
 Each pipeline run **instantiates** the agent it needs against its **own** disposable workload
 container, with its own session/trace/budget. So "can the QA/coding agent work on multiple repos?"
 → yes: repo A's run and repo B's run are *separate instantiations* of the same definition that
@@ -691,8 +710,9 @@ has no judgment in it (an LLM can only misjudge a clear exit code), and the coor
 image scan, deploy — deterministic, pass/fail on exit codes. Keep them as Jenkins stages.
 Agents enter only where judgment lives.
 
-**Four agents (each a single ADK LoopAgent + a skill — NOT a manager/worker hierarchy; each
-reaches its integrations via stdio MCP servers).** Three do the work; one is your interface:
+**Four agents (each a single `LlmAgent` worker in a dynamic-workflow loop + a skill — NOT a
+manager/worker hierarchy; each reaches its integrations via stdio MCP servers).** Three do the work;
+one is your interface:
 - **QA agent** — drives Playwright (Phase 1.5, workload container) against the staging deploy,
   emits a structured pass/fail JSON report. Skill: `qa-automation` (built on `browser-ops`).
 - **Triage agent** — reads failure logs/traces via the **Grafana MCP** (Loki/Tempo/Prometheus,
@@ -1012,14 +1032,16 @@ and decide by talking to the lead, which relays your authenticated decision into
 gate (the approval is cryptographically yours; audit shows *you* approved via the lead).
 
 **HITL placement — why the gates live in Jenkins/async, NOT ADK's `RequestInput`.** ADK 2.x has a
-native human-input node (`RequestInput`, model-free), but it's the wrong tool for *these* gates,
-for two reasons. **(1) It requires a graph workflow** — the agents are `LoopAgent`s (Template
-workflows), so `RequestInput` isn't even available to them until/unless an agent graph-migrates
-(Phase 6.5). **(2) Even then it would regress the concurrency model:** a `RequestInput` pause holds
-the *agent run* (its LM Studio slot + workload container) open while waiting for the human — which,
-against a single-endpoint concurrency cap, is exactly the resource you can't tie up for hours. The
-two gates are deliberately **pipeline-level and resource-cheap to pause**: prod-deploy approval
-pauses the **Jenkins** pipeline (`input` step — no GPU, no model, no container held), and escalation
+native human-input node (`RequestInput`, model-free), but it's the wrong tool for *these* gates, for
+two reasons. **(1) The gates aren't inside an agent run.** Prod-deploy approval and escalation are
+*pipeline-level* events that occur in **Jenkins between stages** (after the QA-agent stage, before the
+prod-deploy stage) — there is no agent executing at that moment to host a `RequestInput` node;
+`RequestInput` pauses *an agent/graph run*, which is the wrong scope. **(2) Even if forced into an
+agent run, it would regress the concurrency model:** a `RequestInput` pause holds the *agent run* (its
+LM Studio slot + workload container) open while waiting for the human — which, against a single-
+endpoint concurrency cap, is exactly the resource you can't tie up for hours. The two gates are
+deliberately **pipeline-level and resource-cheap to pause**: prod-deploy approval pauses the
+**Jenkins** pipeline (`input` step — no GPU, no model, no container held), and escalation
 is an **async GitHub issue** (the agent run completes and releases its slot; the human picks it up
 later). So: keep prod approval on Jenkins `input` (Phase-8 Cancel-backed), keep escalation async.
 `RequestInput` is reserved for *agent-internal* graph checkpoints in Phase 6.5, not for these gates.
@@ -1151,7 +1173,7 @@ the point.
 | 4 | Observability (2 planes) + command center | Optimize | Phoenix (agent command center) + Jaeger / ADK web UI (dev) + Prometheus/Grafana (app) | env vars + tags |
 | 5 | Eval + benchmark + simulation | Optimize | proves the agents work + no regressions | JSON/YAML + sweep |
 | 6 | Self-optimization | Optimize | tunes agent prompts | CLI + light code |
-| 6.5 | Graph-workflow migration | Build | when an agent's loop outgrows itself (e.g. coding agent) | node/edge + Python |
+| 6.5 | Static graph workflow | Build | when an agent's loop branches beyond itself (e.g. coding agent) | node/edge + Python |
 | 7 | Scale + kill-switch + concurrency model | Scale/Govern | parallel across repos / serialize within a repo / global LLM-capacity cap; Falco brake | YAML + watchdog |
 | 8 | Control surface + console | Build/Govern | operator console: watch, approve, stop, reports | API + app |
 | 9 | **Self-healing CI/CD team** | Build/Govern | **the product: gated pipeline + self-heal loop** (Jenkins, 4 agents incl. team-lead, gitleaks/Semgrep/Trivy/Syft/cosign/Squawk, Renovate, Postgres metrics DB + parameterized query tools, branch protection, diff allow-list, auto-rollback) | Jenkinsfile + SKILL.md + config |
@@ -1169,7 +1191,8 @@ Build the foundation bottom-up: **0–1** first (an agent with hands in a sandbo
 (the browser/GitHub/email tools + skills the team needs), then **2 and 4** together (persistence
 + observability give a debuggable system — and observability is triage's input). Then **3**
 (harden before the coding agent executes patches unattended). Then **5–6** (prove and tune the
-agents). **6.5** is optional/demand-driven (likely first for the coding agent). **7** when one
+agents). **6.5** (graduating an agent's dynamic loop to a static branching graph) is optional/demand-
+driven (likely first for the coding agent). **7** when one
 machine isn't enough or you want the kill-switch backstop. **8** after 3 and 7 (the operator
 console needs auth + a real server-side stop/approval before exposure). Then **9** — the CI/CD
 team itself, the capstone that consumes 1–8, built manifest-driven and `repo_id`-keyed. Finally

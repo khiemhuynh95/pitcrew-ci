@@ -28,14 +28,26 @@ These are settled architecture decisions. If a task seems to require breaking on
 flag it** — do not silently work around them. They also live in `CLAUDE.md` so they're always in
 context.
 
-1. **Orchestration = `LoopAgent` + a single `LlmAgent` + Skills. No routing.** No `sub_agents`,
-   no `AgentTool` coordinators, no `transfer_to_agent`, **no "manager agent."** Specialization
-   comes from loading a `SKILL.md`, not from agent-to-agent delegation. (Local models are weak at
-   tool-calling; every routing hop is a failure multiplier.)
+1. **Orchestration = ADK 2.x Workflow Runtime (graph engine), NOT `LoopAgent`, NOT routing.** The
+   worker is a single (non-deprecated) `LlmAgent` + Skills; the bounded outer loop is an ADK
+   **dynamic workflow** — a plain-Python `while step < budget and not finished: await
+   ctx.run_node(worker)` (the documented replacement for the deprecated `LoopAgent`, with free
+   checkpoint/resume). No `sub_agents`, no `AgentTool`, no `transfer_to_agent`, **no Task-API /
+   Collaborative / inter-agent-routing layer, no "manager agent."** Specialization comes from loading
+   a `SKILL.md`, not from agent-to-agent delegation. (Local models are weak at tool-calling; every
+   routing hop is a failure multiplier.) **Do NOT use `LoopAgent`/`SequentialAgent`/`ParallelAgent`
+   — they are deprecated in ADK 2.0 and slated for removal.** Graduate to a **static graph
+   `Workflow`** (nodes + code routers returning `Event(route=...)` + `JoinNode`) only when an agent's
+   phases branch (Milestone 6.5) — same engine, more expressive shape.
 
-2. **Pin `google-adk~=2.1`.** Don't use 1.x patterns that 2.x supersedes. Migration hygiene:
-   JSON-blob session storage; **never** override `_run_async_impl()` (use callbacks); **never**
-   broad `except Exception:` inside a tool (it swallows the engine's retry/HITL signals).
+2. **Pin `google-adk~=2.1`.** Build on the graph engine from day one (invariant 1). **Engine
+   requirements (not style):** JSON-blob session storage (Event schema gained `node_info`/`output`);
+   **never** override `_run_async_impl()` (the graph engine ignores it — use callbacks/nodes);
+   **never append events to the session directly and never call `enqueue_event`** — *yield* events
+   from the node (appending circumvents the engine and breaks determinism); **never** broad
+   `except Exception:` inside a tool (the engine auto-catches exceptions for retries/telemetry/HITL —
+   swallowing them disables those signals). Keep `LlmAgent` workers in single-turn/task mode so they
+   compose as nodes.
 
 3. **Two-container trust boundary.** A **control-plane container** (trusted: harness, governance,
    secrets, model endpoint, all credentialed MCP servers) and a **workload container**
@@ -91,8 +103,8 @@ context.
 
 ## 1.5 AGENT & TOOL ROSTER (the who-has-what-and-what-they-can't reference)
 
-**Two meanings of "agent" — do not conflate.** (A) **LLM agents** = ADK LoopAgent + skill + model,
-the only things with MCP tools and judgment. (B) **Deterministic components** loosely called agents
+**Two meanings of "agent" — do not conflate.** (A) **LLM agents** = an `LlmAgent` worker in a
+dynamic-workflow loop + skill + model, the only things with MCP tools and judgment. (B) **Deterministic components** loosely called agents
 but are NOT (no model, no MCP): Jenkins, build planner, notifier, Renovate, auto-rollback. Build (B)
 as plain code, never as LLM agents.
 
@@ -147,7 +159,7 @@ ADK's rule: *check Tools & Integrations for a prebuilt before writing your own.*
   degradation); `before_model_callback` returning a cached `LlmResponse` = the semantic-cache
   **mechanism** (the Redis *store* is still ours).
 - **Config, not code:** all MCP servers via `McpToolset`, any REST via `OpenAPIToolset`, the
-  `LoopAgent` backbone, skills as `SKILL.md` folders.
+  graph-workflow backbone (dynamic-loop), skills as `SKILL.md` folders.
 - **Genuinely custom code (the short list):** the lead's **parameterized query tools** (fixed SQL);
   a **custom local `BaseArtifactService`** (only persistent built-in is GCS = cloud = excluded;
   implement `save`/`load`/`list_keys`/`delete`/`list_versions` over filesystem/Postgres); the
@@ -200,8 +212,10 @@ Set up `pyproject.toml` + `uv.lock` + the initial `Makefile` here.
 **DoD:** `make check-model` succeeds; `make agent` (`adk web`) chats with the agent, served by the
 local model.
 
-### Milestone 1 — Sandbox + loop + native tools
-`LoopAgent(max_iterations) + finish()`; native tools `run_shell/write_file/read_file/copy_out/finish`
+### Milestone 1 — Sandbox + dynamic-workflow loop + native tools
+Worker = one `LlmAgent`; outer loop = an ADK **dynamic workflow** (`while step < budget and not
+finished: await ctx.run_node(worker)`, terminating on `finish()`/escalate) — the LoopAgent
+replacement. Native tools `run_shell/write_file/read_file/copy_out/finish`
 running in the **workload container** behind the exec service; `before_tool_callback` guard
 (step/time budget, denylist). Adopt the Environment Toolset interface (`RemoteEnvironment`) over
 the workload container.
@@ -261,12 +275,16 @@ a deterministic simulated suite; a regression run fails CI.
 `adk optimize` (GEPA) pointed at LM Studio if supported, else DSPy offline. **DoD:** the Phase-5
 score measurably improves after a pass.
 
-### Milestone 6.5 — Graph-workflow migration (ONLY if a loop outgrows itself)
-Lift a loop into an ADK 2.x graph with **code routers** (not `RoutedAgent`, not
-`transfer_to_agent`). Likely first for the coding agent. Graph workflows unlock ADK's native
-**model-free HITL node** (`RequestInput`) for *agent-internal* checkpoints — NOT for the Phase-9
-pipeline gates (those stay Jenkins/async; see the HITL-placement trap). **DoD:** runs as a graph,
-governance Plugin still fires per node, checkpoint/resume works.
+### Milestone 6.5 — Static graph workflow (ONLY if a loop branches beyond itself)
+Graduate an agent from its **dynamic-workflow loop** (the day-one backbone) to a **static graph
+`Workflow`** — explicit nodes + **code routers** returning `Event(route=...)` (not stand-alone Agent
+Routing, not `transfer_to_agent`/Task-API) + `JoinNode` for fan-in — when its phases branch. This is
+**not a migration off a deprecated primitive** (we never used `LoopAgent`) and **not an engine swap** —
+just promoting one graph *shape* to another within the same Workflow Runtime. Likely first for the
+coding agent. The static graph also hosts ADK's native **model-free HITL node** (`RequestInput`) for
+*agent-internal* checkpoints — NOT for the Phase-9 pipeline gates (those stay Jenkins/async; see the
+HITL-placement trap). **DoD:** runs as a static graph, governance Plugin still fires per node,
+checkpoint/resume works.
 
 ### Milestone 7 — Scale-out + kill-switch + concurrency model
 Redis/Valkey broker + workload-container pool; A2A if multi-instance; **Falco** + a metrics
@@ -300,7 +318,8 @@ socket); build/test run on the resolved image via the **exec service**. **A gene
 manifest leaves `deploy:` DISABLED until a human confirms the deploy target** (console or
 committed override) — gates/tests/staging run freely, prod deploy waits. The console surfaces the
 resolved manifest; re-resolve on stack change. The user is **never forced to author `.agentci.yml`**.
-Three agents (QA / triage / coding), each LoopAgent+skill, each reaching integrations via stdio
+Three agents (QA / triage / coding), each an `LlmAgent`+skill in a dynamic-workflow loop, each
+reaching integrations via stdio
 MCP (GitHub/Jenkins/Grafana/email in control plane, Playwright in workload). **Plus a fourth: the
 team-lead agent — your single conversational surface, a SPOKESPERSON not a manager.** You (the
 director) talk to only this agent for status/performance/approvals. It **reads** state (Plane 1
@@ -493,6 +512,18 @@ Minimum set (expand per phase):
 
 ## 7. THE TRAPS (things that will bite if forgotten)
 
+- **Do NOT reach for `LoopAgent`/`SequentialAgent`/`ParallelAgent`.** They're the obvious choice from
+  training data, but they are **deprecated in ADK 2.0** and slated for removal. Build the orchestration
+  on the **Workflow Runtime (graph engine)** instead: the worker is one `LlmAgent`, the outer loop is a
+  **dynamic workflow** (`while step < budget and not finished: await ctx.run_node(worker)`). The
+  per-class doc pages still show `LoopAgent` as a "template workflow" with no deprecation banner —
+  **the runtime `DeprecationWarning` is authoritative over the doc page.** Graduate to a static graph
+  `Workflow` only when phases branch (Milestone 6.5).
+- **Don't append events to the session or call `enqueue_event`** — *yield* events from the node, or the
+  graph engine loses control of persistence/routing/streaming and determinism breaks.
+- **Don't broad-`except Exception:` inside a tool** — the 2.x engine auto-catches exceptions to drive
+  retries, telemetry, and HITL pauses; swallowing them disables those signals.
+- Keep `LlmAgent` workers in **single-turn/task mode** so they compose as graph nodes.
 - LM Studio `localhost` from inside a container is the container, not the host — use the IP.
 - ADK Plugin callbacks may not fire under `InMemoryRunner` (#4464) — verify under the real runtime.
 - **Plugin callbacks take precedence over and SKIP agent-level callbacks.** Plugin hooks run
@@ -545,15 +576,17 @@ Minimum set (expand per phase):
   give it a push trigger and erode pull-only. Exactly two events require human action (prod approval,
   escalation); everything else notified is FYI. Never notify-and-wait on a rollback (it already fired).
 - **The two human gates live in Jenkins/async, NOT ADK's `RequestInput`.** ADK has a native
-  model-free HITL node, but (1) it requires a **graph workflow** — the agents are `LoopAgent`s, so
-  it isn't available to them until a Phase-6.5 graph migration; and (2) a `RequestInput` pause holds
-  the **agent run open** (its LM Studio slot + workload container) while waiting for the human —
-  unaffordable against the single-endpoint concurrency cap. Keep **prod-deploy approval = Jenkins
-  `input`** (resource-cheap pause: no GPU/model/container held) and **escalation = async GitHub
-  issue** (run completes, releases its slot). `RequestInput` is reserved for *agent-internal* graph
-  checkpoints (Phase 6.5), never the pipeline gates. Validated against adk.dev/workflows +
-  /graphs/human-input: the LoopAgent is ADK's Template-workflow (correct fit); graph is its
-  documented successor; routing is still experimental (no-routing stance holds).
+  model-free HITL node, but it's wrong for *these* gates because (1) the gates aren't inside an agent
+  run at all — prod approval and escalation are **pipeline-level events in Jenkins between stages**,
+  with no agent executing to host a `RequestInput`; and (2) even if forced into an agent run, a
+  `RequestInput` pause holds the **agent run open** (its LM Studio slot + workload container) while
+  waiting for the human — unaffordable against the single-endpoint concurrency cap. Keep **prod-deploy
+  approval = Jenkins `input`** (resource-cheap pause: no GPU/model/container held) and **escalation =
+  async GitHub issue** (run completes, releases its slot). `RequestInput` is reserved for
+  *agent-internal* graph checkpoints (Milestone 6.5), never the pipeline gates. Validated against
+  adk.dev/workflows + /graphs/*: we build on the graph engine from day one (dynamic-workflow loop, the
+  LoopAgent replacement); LoopAgent itself is **deprecated**; stand-alone Agent Routing is still
+  experimental (no-routing stance holds).
 - **Agents are per-run instantiations, NOT long-lived singletons.** Don't build "the QA agent" as
   one process that holds a repo and blocks — build the *definition* and instantiate it per run in
   its own container. Different repos parallelize; same-repo serializes (queue + abort superseded

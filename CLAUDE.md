@@ -11,13 +11,19 @@ LiteLLM, no cloud, Docker-compose) that runs gated CI/CD for a user's GitHub rep
 phases are its substrate.
 
 ## Hard invariants (NEVER violate; if a task seems to require it, STOP and flag)
-1. **`LoopAgent` + single `LlmAgent` + Skills. No routing** — no `sub_agents`/`AgentTool`/
-   `transfer_to_agent`, no manager agent. Specialization = load a `SKILL.md`. (The **team-lead
-   agent** is allowed *only* as a read-and-relay **spokesperson** — it reads state + relays the
-   human's approvals; it does NOT coordinate the other agents or hold authority. Jenkins
-   coordinates; the human decides. A lead that orchestrates or auto-approves = the banned manager.)
-2. **`google-adk~=2.1`.** No `_run_async_impl()` overrides; no broad `except Exception:` in tools;
-   JSON-blob sessions.
+1. **ADK Workflow Runtime (graph engine), NOT `LoopAgent`. No routing.** Worker = one `LlmAgent` +
+   Skills; outer loop = a **dynamic workflow** (`while step<budget and not finished: await
+   ctx.run_node(worker)` — the LoopAgent replacement). **Never use `LoopAgent`/`Sequential`/`Parallel`
+   Agent (deprecated in ADK 2.0).** No `sub_agents`/`AgentTool`/`transfer_to_agent`, no Task-API/
+   Collaborative layer, no manager agent. Specialization = load a `SKILL.md`. Graduate to a static
+   graph `Workflow` only when phases branch (6.5). (The **team-lead agent** is allowed *only* as a
+   read-and-relay **spokesperson** — it reads state + relays the human's approvals; it does NOT
+   coordinate the other agents or hold authority. Jenkins coordinates; the human decides. A lead that
+   orchestrates or auto-approves = the banned manager.)
+2. **`google-adk~=2.1`; build on the graph engine from day one.** No `_run_async_impl()` overrides
+   (engine ignores them — use callbacks/nodes); **never append events / never `enqueue_event`** (yield
+   from the node); no broad `except Exception:` in tools (engine auto-catches for retries/HITL);
+   JSON-blob sessions; `LlmAgent` workers in single-turn/task mode.
 3. **Two containers:** control-plane (trusted: harness, governance, secrets, model endpoint,
    credentialed MCP servers) vs workload (untrusted, disposable, per-run: code/browser/patches).
    Exec via a narrow exec service — NOT a Docker socket, NOT DinD. The model never enters the
@@ -55,7 +61,8 @@ phases are its substrate.
     `make` target (`setup`, `check-model`, `up`, `test`, `eval`, `guardrails`, …); if you run a
     command twice, make it a target.
 14. **Agents are per-run instantiations, not long-lived singletons.** An agent = a definition
-    (LoopAgent + skill + model config) instantiated per run in its own disposable container.
+    (an `LlmAgent` worker in a dynamic-workflow loop + skill + model config) instantiated per run in
+    its own disposable container.
     **Different repos parallelize; same-repo serializes** (queue behind the in-flight run; abort +
     replace a newer commit on the same branch). The throughput ceiling is the **single LM Studio
     endpoint** (one GPU, serialized inference) — the global in-flight cap tracks **measured model

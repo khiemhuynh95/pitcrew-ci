@@ -5,11 +5,12 @@ GitHub, VS Code (Mermaid preview), and most Markdown viewers. Each diagram answe
 question — there is deliberately no single master diagram.
 
 All diagrams reflect the architecture **as settled through the latest planning pass** (append-only
-tests, the ≥80% coverage gate, HITL-in-Jenkins, the per-agent thinking policy, LoopAgent =
-ADK Template-workflow). If a diagram and the prose ever disagree, the prose docs win — open an issue.
+tests, the ≥80% coverage gate, HITL-in-Jenkins, the per-agent thinking policy, and the **ADK graph
+Workflow Runtime** backbone — a single `LlmAgent` in a dynamic-workflow loop, *not* the deprecated
+`LoopAgent`). If a diagram and the prose ever disagree, the prose docs win — open an issue.
 
 **Color legend (shared across all diagrams):**
-- 🟪 **agent** (purple) — an LLM agent (a `LoopAgent` + a skill)
+- 🟪 **agent** (purple) — an LLM agent (an `LlmAgent` worker in a dynamic-workflow loop + a skill)
 - 🟦 **pipeline / MCP** (blue) — deterministic pipeline step, or an MCP server (no LLM judgment)
 - 🟩 **gate / scale** (green) — a decision gate or a scale/runtime component
 - 🟥 **data / governance** (red) — a datastore, or a governance/secrets control
@@ -112,7 +113,7 @@ flowchart TB
       FAST --> BUILD --> STAGE
     end
 
-    subgraph AGENTS["AGENT TEAM - each a LoopAgent + skill (no manager)"]
+    subgraph AGENTS["AGENT TEAM - each an LlmAgent in a dynamic-workflow loop + skill (no manager)"]
       direction TB
       QA["QA agent - Playwright on staging"]:::agent
       TRIAGE["TRIAGE agent - classify + standardize issue"]:::agent
