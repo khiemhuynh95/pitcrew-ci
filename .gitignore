@@ -11,6 +11,9 @@ __pycache__/
 .coverage
 htmlcov/
 
+# Playwright MCP session output (snapshots/screenshots written during browser runs)
+.playwright-mcp/
+
 # Editor / OS
 .DS_Store
 .idea/
