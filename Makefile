@@ -2,7 +2,7 @@
 # Targets grow per phase — add a target the moment you'd type a command twice.
 
 .DEFAULT_GOAL := help
-.PHONY: help setup check-model agent smoke up down logs build-workload sandbox fmt lint test clean
+.PHONY: help setup check-model agent smoke up down logs build-workload sandbox skills fmt lint test clean
 
 help:
 	@echo Targets:
@@ -14,6 +14,7 @@ help:
 	@echo "  down         stop the compose stack"
 	@echo "  logs         tail compose logs"
 	@echo "  sandbox      run the autonomous-goal sandbox demo (Milestone 1 DoD)"
+	@echo "  skills       run the skills + browser MCP demo (Milestone 1.5 DoD)"
 	@echo "  fmt          format with ruff"
 	@echo "  lint         lint with ruff"
 	@echo "  test         run unit tests (pytest)"
@@ -46,6 +47,9 @@ build-workload:
 
 sandbox:
 	uv run python scripts/sandbox_demo.py
+
+skills:
+	uv run python scripts/skills_demo.py
 
 fmt:
 	uv run ruff format .

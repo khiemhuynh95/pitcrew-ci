@@ -5,8 +5,9 @@ The settled orchestration backbone (CLAUDE.md invariant #1 / HANDOFF §1.1): the
 `while step < budget and not finished: await ctx.run_node(worker)` driven from a `FunctionNode`,
 wrapped in a `Workflow` so the graph engine gives checkpoint/resume for free. This REPLACES the
 deprecated `LoopAgent` (removed in ADK 2.x per the build-plan update). No sub_agents/routing —
-specialization will come from Skills (Milestone 1.5), at which point THIS FILE BECOMES CONSTANT
-(invariant #6): adding a capability is a SKILL.md folder or an MCP registry block, never an edit here.
+specialization comes from Skills + MCP servers loaded by `capabilities.load_capabilities()`. As of
+Milestone 1.5 THIS FILE IS CONSTANT (invariant #6): adding a capability is a SKILL.md folder or an
+MCP registry block, never an edit here.
 
 The worker reasons in the control plane (where the model + guardrails live); its hands
 (run_shell/write_file/read_file/copy_out) execute in the disposable workload container via the
@@ -26,6 +27,7 @@ from google.adk.agents.context import Context
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.workflow import START, Workflow, node
 
+from control_plane.capabilities import load_capabilities
 from control_plane.guard import before_tool_guard
 from control_plane.sandbox import copy_out, finish, read_file, run_shell, write_file
 
@@ -66,15 +68,21 @@ _worker = LlmAgent(
         "You are PitCrew, an autonomous worker operating inside a disposable sandbox (a Linux "
         "container). You are given a goal and must accomplish it yourself, step by step, using "
         "your tools.\n\n"
-        "Tools: run_shell (run a command in the sandbox), write_file / read_file (text files "
-        "under the sandbox /work dir), copy_out (save a sandbox file as a durable artifact before "
-        "you finish — anything not copied out is lost), and finish (call when done or stuck).\n\n"
+        "Sandbox tools: run_shell (run a command in the sandbox), write_file / read_file (text "
+        "files under the sandbox /work dir), copy_out (save a sandbox file as a durable artifact "
+        "before you finish — anything not copied out is lost), and finish (call when done or "
+        "stuck).\n\n"
+        "You may also have SKILLS and additional tools (e.g. a browser). Before doing unfamiliar "
+        "work, check whether a skill applies: list the available skills and load the relevant "
+        "one's instructions, then follow them. Use only the tools you actually have.\n\n"
         "Rules: work in small concrete steps and inspect results before moving on. Save any final "
         "output with copy_out. When the goal is achieved (or you genuinely cannot proceed), call "
         "finish with a short summary of what you did and which artifacts you saved. Do not ask the "
         "user questions — you are autonomous."
     ),
-    tools=[run_shell, write_file, read_file, copy_out, finish],
+    # Native sandbox tools stay here; everything that grows over time (skills + MCP servers) comes
+    # from load_capabilities(), so this file never changes when a capability is added (invariant #6).
+    tools=[run_shell, write_file, read_file, copy_out, finish, *load_capabilities()],
     before_tool_callback=before_tool_guard,
 )
 

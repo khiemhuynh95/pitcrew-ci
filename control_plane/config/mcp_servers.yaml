@@ -1,0 +1,47 @@
+# stdio MCP registry (HANDOFF invariant #5 / §1.5-B). One block per external integration.
+#
+# Uniform wiring (command + args + env + tool_filter) != uniform privilege. The loader
+# (capabilities.py) turns every ENABLED block into one tool_filter'd McpToolset — adding or
+# swapping an integration is editing this file, never agent.py (invariant #6).
+#
+# placement records WHERE the server belongs once the two-container split is real (Milestone 3):
+#   control_plane = narrow, outbound, holds a secret   (email, later github/jenkins/grafana)
+#   workload      = open-ended + untrusted-inbound      (playwright)
+# Until then the control-plane host launches every enabled stdio server itself (the plan's M1.5
+# step: Playwright via npx now, flipped into the workload container at the Scale tie-in).
+#
+# tool_filter is the FIRST governance lever: the model only ever sees the verbs listed here. The
+# official servers expose broad verb sets — a tight allowlist is mandatory, not optional.
+
+servers:
+  playwright:
+    enabled: true
+    placement: workload
+    command: npx
+    args: ["-y", "@playwright/mcp@latest", "--headless", "--isolated"]
+    env: {}
+    # Read/navigate + the minimal interaction verbs the QA agent will need (Phase 9). No
+    # file-download / pdf / install / tab-management verbs until a skill actually requires them.
+    tool_filter:
+      - browser_navigate
+      - browser_navigate_back
+      - browser_snapshot
+      - browser_take_screenshot
+      - browser_click
+      - browser_type
+      - browser_wait_for
+
+  email:
+    # Disabled until SMTP_* creds are set in .env — enabling it lets the agent send REAL mail.
+    enabled: false
+    placement: control_plane
+    command: npx
+    args: ["-y", "email-send-mcp"]
+    env:
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+    # Send only — no inbox read/delete; SMTP, never IMAP (HANDOFF §1.5 step 4).
+    tool_filter:
+      - send_email
