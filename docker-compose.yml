@@ -1,0 +1,45 @@
+# PitCrew compose stack. Grows per phase (control-plane, squid, observability, jenkins/sonar...).
+# Milestone 1: the workload container only — the disposable, hardened sandbox that runs untrusted
+# and model-generated code behind the narrow exec service. The control-plane agent runs on the
+# host this milestone (it reaches LM Studio at 127.0.0.1 and the exec service at 127.0.0.1:8800);
+# full control-plane containerization + LM-Studio-by-LAN-IP lands with egress hardening (M3).
+
+services:
+  workload:
+    build: ./workload
+    image: pitcrew-workload
+    container_name: pitcrew-workload
+    # --- hardening (CLAUDE.md invariant #3): untrusted, disposable, least privilege ---
+    read_only: true                  # immutable rootfs; only the tmpfs below is writable
+    user: "10001:10001"              # non-root
+    cap_drop: ["ALL"]                # drop all Linux capabilities
+    security_opt:
+      - no-new-privileges:true       # no setuid escalation
+    pids_limit: 256
+    mem_limit: 1g
+    environment:
+      WORKDIR: /work
+      EXEC_SERVICE_TOKEN: ${EXEC_SERVICE_TOKEN:?set EXEC_SERVICE_TOKEN in .env}
+    # Ephemeral sandbox tmpfs (wiped on restart — disposable per-run). Short-form so `mode=1777`
+    # is passed through as octal (sticky + world-writable), letting the non-root user write.
+    # NOTE: revisit exec-on-/work when the build sandbox must run compiled binaries (Phase 9).
+    tmpfs:
+      - /tmp:size=67108864,mode=1777
+      - /work:size=268435456,mode=1777
+    ports:
+      - "127.0.0.1:8800:8800"        # exec service reachable ONLY from the host (control plane)
+    networks:
+      - internal                     # no egress wiring yet; Squid allowlist arrives in M3
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8800/healthz',timeout=3).status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+networks:
+  internal:
+    driver: bridge
+    # NOTE (M3): becomes `internal: true` + Squid egress allowlist; the workload gets no direct
+    # outbound route. Left routable now so `make sandbox` can pull a package if a goal needs one.

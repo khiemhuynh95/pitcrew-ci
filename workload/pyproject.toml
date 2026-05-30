@@ -1,0 +1,13 @@
+[project]
+name = "pitcrew-workload"
+version = "0.0.0"
+description = "PitCrew workload container — narrow exec service. Minimal deps = small attack surface."
+requires-python = ">=3.12"
+# Deliberately tiny: this image runs untrusted/model-generated code, so it carries the fewest
+# packages possible (CLAUDE.md invariant #3, HANDOFF §4.5). NO google-adk / litellm here — the
+# model never enters this container.
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "pydantic>=2",
+]

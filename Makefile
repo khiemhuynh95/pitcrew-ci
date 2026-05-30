@@ -2,7 +2,7 @@
 # Targets grow per phase — add a target the moment you'd type a command twice.
 
 .DEFAULT_GOAL := help
-.PHONY: help setup check-model agent smoke fmt lint test clean
+.PHONY: help setup check-model agent smoke up down logs build-workload sandbox fmt lint test clean
 
 help:
 	@echo Targets:
@@ -10,6 +10,10 @@ help:
 	@echo "  check-model  verify LM Studio endpoint + configured model (the #1 first-run trap)"
 	@echo "  agent        run adk web against the control-plane agent (Milestone 0/1)"
 	@echo "  smoke        non-interactive one-turn chat test against LM Studio"
+	@echo "  up           build + start the compose stack (workload sandbox)"
+	@echo "  down         stop the compose stack"
+	@echo "  logs         tail compose logs"
+	@echo "  sandbox      run the autonomous-goal sandbox demo (Milestone 1 DoD)"
 	@echo "  fmt          format with ruff"
 	@echo "  lint         lint with ruff"
 	@echo "  test         run unit tests (pytest)"
@@ -27,6 +31,21 @@ agent:
 
 smoke:
 	uv run python scripts/smoke_chat.py
+
+up:
+	docker compose up -d --build
+
+down:
+	docker compose down
+
+logs:
+	docker compose logs -f
+
+build-workload:
+	docker compose build workload
+
+sandbox:
+	uv run python scripts/sandbox_demo.py
 
 fmt:
 	uv run ruff format .
