@@ -1,0 +1,17 @@
+# Secrets — NEVER commit a real .env (SOPS-encrypted secrets arrive in Milestone 3)
+.env
+control_plane/secrets/*.env
+
+# Python / uv
+.venv/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

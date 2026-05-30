@@ -1,0 +1,29 @@
+[project]
+name = "pitcrew-ci"
+version = "0.0.0"
+description = "Self-healing CI/CD agent team (local, OSS, Google ADK + LM Studio via LiteLLM)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    # Pin the 2.x line per CLAUDE.md invariant #2 (no 1.x patterns).
+    "google-adk~=2.1",
+    # LiteLLM shim to LM Studio. Avoid 1.82.7-1.82.8 (security advisory) — HANDOFF §2.
+    "litellm>=1.82.9",
+    "python-dotenv>=1.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.6",
+    "pytest>=8.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+extend-select = ["I"]  # import sorting
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
