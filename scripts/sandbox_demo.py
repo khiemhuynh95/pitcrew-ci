@@ -1,7 +1,7 @@
 """Milestone 1 DoD demo.
 
-Part A (autonomy): give the LoopAgent a goal; it works in the sandbox, copies out an artifact,
-and stops cleanly at finish() (not max_iterations).
+Part A (autonomy): give the dynamic-workflow loop a goal; it works in the sandbox, copies out an
+artifact, and stops cleanly at finish() (escalate), not the iteration budget.
 Part B (isolation): probe the exec service directly to prove the workload container cannot escape
 /work or reach the host/control-plane filesystem.
 """
