@@ -27,9 +27,11 @@ Workflow Runtime** backbone — a single `LlmAgent` in a dynamic-workflow loop, 
 The key invariant this encodes: **each agent's *brain* and model calls run in the control plane;
 only its *untrusted execution* (running patches, driving a browser) runs in the disposable workload
 container. The model never enters the workload** — the control plane bridges in via
-`RemoteEnvironment` → `LocalEnvironment`. Credentialed MCP servers (GitHub/Jenkins/Grafana/SMTP)
-sit in the control plane with the secrets; only open-ended, untrusted-inbound Playwright sits in the
-workload.
+`RemoteEnvironment` → `LocalEnvironment` (and, for the **coding agent specifically**, via the
+embedded **mini-swe-agent**'s `ExecServiceEnvironment.execute()` — mini's brain + model calls stay
+control-plane, only its bash crosses; see `mini_swe_agent_integration.md`). Credentialed MCP servers
+(GitHub/Jenkins/Grafana/SMTP) sit in the control plane with the secrets; only open-ended,
+untrusted-inbound Playwright sits in the workload.
 
 ```mermaid
 flowchart TB
@@ -44,7 +46,7 @@ flowchart TB
       direction TB
       PLUGIN["governance Plugin (Presidio / LLM Guard / NeMo)<br/>fires on EVERY model + tool call"]:::govern
       TRIAGE["TRIAGE agent brain"]:::agent
-      CODER["CODING agent brain"]:::agent
+      CODER["CODING agent brain<br/>(embedded mini-swe-agent + wrapping node)"]:::agent
       QABRAIN["QA agent brain"]:::agent
       LEAD["TEAM-LEAD agent (pull-only)"]:::agent
       GHMCP["github-mcp-server stdio - holds PAT"]:::mcp
@@ -65,9 +67,9 @@ flowchart TB
     TRIAGE --> GRMCP
     TRIAGE --> GHMCP
     TRIAGE --> JENMCP
-    CODER --> GHMCP
+    CODER -->|wrapping node, post diff-allow-list| GHMCP
     LEAD --> MAILMCP
-    CODER -->|RemoteEnvironment bridge| EXEC
+    CODER -->|mini ExecServiceEnvironment.execute bridge| EXEC
     QABRAIN -->|drives| PWMCP
 
     TRIAGE --> LM
@@ -113,11 +115,11 @@ flowchart TB
       FAST --> BUILD --> STAGE
     end
 
-    subgraph AGENTS["AGENT TEAM - each an LlmAgent in a dynamic-workflow loop + skill (no manager)"]
+    subgraph AGENTS["AGENT TEAM - LlmAgent in a dynamic-workflow loop + skill; coding agent = embedded mini-swe-agent (no manager)"]
       direction TB
       QA["QA agent - Playwright on staging"]:::agent
       TRIAGE["TRIAGE agent - classify + standardize issue"]:::agent
-      CODER["CODING agent - propose fix (workload) + pre-push tests/coverage gate"]:::agent
+      CODER["CODING agent (embedded mini-swe-agent) - propose fix (workload)<br/>+ pre-push tests/coverage gate; emits git diff"]:::agent
     end
 
     P1["PLANE 1 - agent OTel traces"]:::opt
@@ -178,8 +180,8 @@ flowchart TB
     INFRA["INFRA: escalate to human (secrets, down dep, runner)"]:::human
     REAL{"REAL + fixable + budget left?"}:::gate
 
-    CODER["CODING agent (workload, thinking ON)<br/>append-only tests; pre-push: tests pass AND coverage >= 80%"]:::agent
-    ALLOW{"diff allow-list: reject test modify/delete,<br/>gate/CI/dep edits, suppressions"}:::gate
+    CODER["CODING agent = embedded mini-swe-agent (workload exec, mini-driven reasoning)<br/>append-only tests; pre-push: tests pass AND coverage >= 80%; emits git diff"]:::agent
+    ALLOW{"diff allow-list (control-plane wrapping node, on mini's git diff):<br/>reject test modify/delete, gate/CI/dep edits, suppressions"}:::gate
     HALT["patch rejected - escalate"]:::human
     FIXPR["agent-fix PR - labeled, NEVER auto-merged"]:::pipe
     PIPE["re-enters the FULL gated pipeline"]:::pipe
@@ -428,9 +430,9 @@ flowchart TB
 
 | # | Diagram | Primary doc section |
 |---|---|---|
-| 1 | Trust boundary + MCP placement | Architecture decisions; Phase 1/1.5; HANDOFF §1.5-B |
+| 1 | Trust boundary + MCP placement | Architecture decisions; Phase 1/1.5; HANDOFF §1.5-B; `mini_swe_agent_integration.md` §3–4 |
 | 2 | CI/CD pipeline | Phase 9 (pipeline order, build planner) |
-| 3 | Self-heal loop (hardened) | Phase 9 (self-heal); invariants #8, #9 |
+| 3 | Self-heal loop (hardened) | Phase 9 (self-heal); invariants #8, #9, #16; `mini_swe_agent_integration.md` §7 |
 | 4 | Communication model | Phase 9 (communication); HITL-placement note |
 | 5 | Concurrency model | Phase 7; invariant #14 |
 | 6 | Managed-app error capture | Phase 9 (managed-app log capture) |
