@@ -3,6 +3,10 @@
 # and model-generated code behind the narrow exec service. The control-plane agent runs on the
 # host this milestone (it reaches LM Studio at 127.0.0.1 and the exec service at 127.0.0.1:8800);
 # full control-plane containerization + LM-Studio-by-LAN-IP lands with egress hardening (M3).
+# Milestone 2 adds Redis 8 (the consolidated backbone — semantic cache + vector now; cross-run
+# memory + the Phase-7 task broker reuse the same instance). Sessions persist via SQLite
+# (DatabaseSessionService) — ADK 2.1 has no Redis session service, so Redis backs only the parts
+# ADK doesn't own. The control plane reaches Redis at 127.0.0.1:6379 while it runs on the host.
 
 services:
   workload:
@@ -37,6 +41,30 @@ services:
       timeout: 5s
       retries: 5
       start_period: 5s
+
+  # Milestone 2: the consolidated local backbone. Redis 8 GA folds the query engine (vector
+  # search / RediSearch) into core — no redis-stack image needed — so one instance covers the
+  # semantic-response cache (vector KNN over prompt embeddings) and, later, cross-run memory and
+  # the Phase-7 task broker. Trusted store: it lives on the control-plane side, NOT the workload
+  # network. Data persists to a named volume so the cache survives a restart.
+  redis:
+    image: redis:8
+    container_name: pitcrew-redis
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:6379:6379"        # reachable ONLY from the host (the control plane), not the LAN
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 3s
+
+volumes:
+  redis-data:
 
 networks:
   internal:
