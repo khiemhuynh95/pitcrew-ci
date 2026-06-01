@@ -14,6 +14,9 @@ htmlcov/
 # Playwright MCP session output (snapshots/screenshots written during browser runs)
 .playwright-mcp/
 
+# Persisted session store (Milestone 2 — SQLite DatabaseSessionService; recreated on demand)
+data/
+
 # Editor / OS
 .DS_Store
 .idea/

@@ -61,6 +61,18 @@ follows from the product being a CI/CD tool other people self-host.
    for fan-in — only when the phase logic (research→plan→execute→verify) outgrows one loop. Same
    engine, more expressive shape; the worker and tools/skills carry over unchanged. ADK still flags
    stand-alone **Agent Routing as experimental** — keep routing in deterministic code routers.
+   → *The one deliberate exception — the coding agent's inner loop is **embedded `mini-swe-agent`**
+   (MIT, pinned `==2.2.x`), wrapped as a single node.* QA, triage, and team-lead stay pure ADK
+   (single `LlmAgent` in a dynamic-workflow loop); only the coding agent diverges, because harness
+   design swings coding success up to ~6× and mini is a battle-tested generate→edit→test→iterate loop
+   (>74% SWE-bench Verified) from the SWE-bench team — we inherit the hardest-to-tune part instead of
+   hand-building it. **The entire custom surface is one `ExecServiceEnvironment` adapter** (mini's
+   `Environment` protocol → our exec service → the workload container) plus a thin wrapping node;
+   mini's brain + model calls stay in the control plane and **only its bash `execute()` crosses into
+   the workload**, so the trust boundary holds exactly. mini emits a **`git diff`, never a push**; the
+   control-plane wrapping node applies the diff allow-list and opens the PR. Because mini runs *outside*
+   ADK, the governance Plugin can't see its per-call traffic — its safety is **structural** (see
+   Phase 9 and the standalone `mini_swe_agent_integration.md` for the full contract).
 
 2. **ADK version = pin `google-adk~=2.1` now.** 2.0 went GA 2026-05-19; 2.1 followed 4 days later. The
    Workflow Runtime (graph engine) is the headline of 2.0 and where all current hardening is going; it
@@ -490,9 +502,17 @@ model/prompt change doesn't regress the team.
    artifact service is GCS (cloud — excluded), so this rides on a **custom local
    `BaseArtifactService`**.
 
+**Coding-agent eval bonus (free, standardized) — mini-swe-agent *is* the SWE-bench harness.** Since
+the coding agent embeds **mini-swe-agent** (Phase 9 / Architecture decision 1), and mini ships batch
+SWE-bench evaluation, point its **batch eval at LM Studio** to measure your loaded model's fix-success
+on **SWE-bench Verified** directly — a credible, comparable coding number with **zero extra harness to
+build**. Pin the mini version + a SWE-bench split so numbers stay comparable across runs; this is the
+coding agent's analogue to the triage classification accuracy metric.
+
 **Bands:** Optimize (evaluation, benchmarking, simulation)
 **Tools (free/OSS, all local):** ADK eval + Environment/User Simulation; DeepEval / Promptfoo /
-Ragas with an **LM Studio judge**; Phase 4 OTel traces as the metric source.
+Ragas with an **LM Studio judge**; **mini-swe-agent's batch SWE-bench eval** for the coding agent;
+Phase 4 OTel traces as the metric source.
 **Low-code surface:** JSON evalsets; Promptfoo YAML. **Custom:** the sweep/aggregation harness.
 **Done when:** you can answer "model A vs B / prompt v1 vs v2 / budget 40 vs 80" with mean ±
 variance from a deterministic simulated suite, and a regression run fails CI on a quality drop.
@@ -524,7 +544,10 @@ in-flight cap (which must track *model* capacity, not container count).
 iteration over one `LlmAgent` worker, see decision 1 & Phase 1) to a **static graph `Workflow`** once
 its logic is too tangled for one loop — i.e. it needs explicit *branching* between distinct phases,
 parallel sub-investigations (fan-out/fan-in), or a debuggable phase graph. (A likely candidate: the
-coding agent's read → plan → patch → test → revise cycle, once the branches multiply.)
+**triage** agent, if its diagnose → gather-evidence → classify path ever needs parallel
+sub-investigations. **Note:** the coding agent's read → plan → patch → test → revise cycle is *not* a
+candidate — that loop is supplied by **embedded mini-swe-agent** (Architecture decision 1), not an ADK
+dynamic loop, so it is never "graduated" to an ADK static graph; mini owns that shape.)
 
 **Why its own phase (not earlier):** we already build on the graph engine from Phase 1 — so this is
 **not a migration off a deprecated primitive** (we never used `LoopAgent`) and **not an engine swap**.
@@ -710,8 +733,10 @@ has no judgment in it (an LLM can only misjudge a clear exit code), and the coor
 image scan, deploy — deterministic, pass/fail on exit codes. Keep them as Jenkins stages.
 Agents enter only where judgment lives.
 
-**Four agents (each a single `LlmAgent` worker in a dynamic-workflow loop + a skill — NOT a
-manager/worker hierarchy; each reaches its integrations via stdio MCP servers).** Three do the work;
+**Four agents (each a single worker + a skill — NOT a manager/worker hierarchy; each reaches its
+integrations via stdio MCP servers). Three (QA, triage, team-lead) are a single `LlmAgent` in a
+dynamic-workflow loop; the coding agent is the one exception — its inner loop is embedded
+mini-swe-agent (Architecture decision 1).** Three do the work;
 one is your interface:
 - **QA agent** — drives Playwright (Phase 1.5, workload container) against the staging deploy,
   emits a structured pass/fail JSON report. Skill: `qa-automation` (built on `browser-ops`).
@@ -719,9 +744,26 @@ one is your interface:
   Phase 4) and build logs via the **GitHub/Jenkins MCP**, classifies: flaky / infra /
   real-fixable-code-bug. Its *only write* tool is `create_issue` (structured). Skill:
   `failure-triage`.
-- **Coding agent** — takes a fixable bug, proposes a patch. **Runs in the untrusted workload
-  container** (it executes model-generated code — the highest-risk action in the system) and
-  reaches GitHub via the **GitHub MCP** filtered to PR/branch verbs only. Skill: `code-fix`.
+- **Coding agent** — takes a fixable bug, proposes a patch. **The one non-ADK agent: its inner loop
+  is embedded `mini-swe-agent`** (MIT, pinned `==2.2.x`), wrapped as a single ADK node — see
+  Architecture decision 1 and the standalone `mini_swe_agent_integration.md`. mini's bash-only
+  generate→edit→test loop is a strong fit for a weak local model (it never relies on structured
+  function-calling). **Execution runs in the untrusted workload container** (it executes
+  model-generated code — the highest-risk action in the system), but **mini's brain + model calls
+  stay in the control plane; only its bash `execute()` crosses** the boundary via the one custom
+  piece we build — an **`ExecServiceEnvironment`** adapter (mini's `Environment` protocol → the exec
+  service → workload; **not** mini's `DockerEnvironment`, which would need a Docker socket). mini
+  **emits a `git diff`, never a push, and the GitHub token never enters the workload**: the
+  control-plane **wrapping node** extracts the diff, applies the diff allow-list (below), and only
+  then opens the `agent-fix` branch + PR via the **GitHub MCP** filtered to PR/branch verbs. Bound one
+  fix attempt with mini's **`step_limit`** (not `cost_limit` — local cost ≈ 0); the per-issue attempt
+  budget (~2) is the separate circuit-breaker layer. Because mini runs *outside* ADK the governance
+  Plugin can't see its calls — its safety is **structural**: per-command screening at the exec service
+  (denylist + Squid egress), the diff allow-list on its output, full-pipeline re-entry + human merge,
+  and **screening the task input for injection before invoking mini** (the one Plugin job that
+  relocates here). Capture mini's linear **trajectory JSON** → the artifact store + an OTel span.
+  Skill: `code-fix` (= mini's `system_template` + `instance_template`: fix, run tests, meet ≥80%
+  coverage, submit `git diff`).
   **Pre-push self-gate (required):** before opening the PR, the agent runs the repo's **unit tests
   + coverage** in its workload container (using the test command the build planner resolved, so it
   matches CI) and **must not push unless all unit tests pass AND project coverage stays ≥ 80%**. If
@@ -787,14 +829,20 @@ longer and eats into the Phase-7 concurrency cap. Enable it *selectively*:
   failures), so the latency cost is affordable. Strongest candidate.
 - **Coding → YES.** Fix generation is the most reasoning-heavy generative task; a wrong fix costs a
   **full pipeline cycle**, far more than the thinking tokens. Also off the hot path (self-heal only).
+  **Mechanism differs:** the coding agent's reasoning comes from **mini-swe-agent's own prompt-driven
+  loop** (optionally a reasoning model loaded in LM Studio — QwQ / Qwen3-thinking / DeepSeek-R1-distill),
+  **not** `PlanReActPlanner` (which is for the ADK agents — triage). It's the same "thinking ON"
+  intent, supplied by mini's harness rather than an ADK planner.
 - **QA → NO.** Execution-bound (browser driving), not reasoning-bound, and already slow — thinking
   adds latency for little judgment gain.
 - **Team-lead → NO.** Deliberately low-reasoning by design (parameterized queries, not NL2SQL) and
   it's the **interactive** surface — it must answer fast, not pause to "think."
 
-**Mechanism (LM Studio, not Gemini):** use ADK's **`PlanReActPlanner`** (prompt-driven
-plan→act→reason; model-agnostic — the docs recommend it precisely for "models without a built-in
-thinking feature"). **Never `BuiltInPlanner` / `ThinkingConfig`** — those target Gemini's
+**Mechanism (LM Studio, not Gemini):** for the **ADK agents (triage)**, use ADK's
+**`PlanReActPlanner`** (prompt-driven plan→act→reason; model-agnostic — the docs recommend it
+precisely for "models without a built-in thinking feature"); the **coding agent gets its reasoning
+from mini's own loop instead** (above), so `PlanReActPlanner` does not apply to it. **Never
+`BuiltInPlanner` / `ThinkingConfig`** — those target Gemini's
 thinking-tokens API and silently do nothing on a local model. Alternatively, if a *reasoning* model
 is loaded in LM Studio (QwQ / Qwen3-thinking / DeepSeek-R1-distill), it thinks natively — then the
 policy inverts to **suppressing** thinking for QA + lead. Either way **bound the reasoning length**
@@ -978,9 +1026,10 @@ app** (honors clone-and-go):
   `/tests/`), strict required status checks, dismiss-stale-approvals, `enforce_admins: true`. The
   agent then *cannot* merge its own PR even if its code tried to. **Highest-leverage change in the
   whole phase; near-zero cost.**
-- **Diff allow-list (the defense against reward-hacking the green-pipeline signal).** Before the
-  coding agent opens any PR, the control plane parses its diff (`git diff --name-status`) and
-  enforces: **fully rejected** (no touch) — `.github/**`, `Jenkinsfile`, `Dockerfile`, dependency
+- **Diff allow-list (the defense against reward-hacking the green-pipeline signal).** mini emits a
+  **`git diff` as its submission** (never a push); the **control-plane wrapping node** — not mini, and
+  not anything holding the GitHub token inside the workload — parses that diff (`git diff
+  --name-status`) before opening any PR and enforces: **fully rejected** (no touch) — `.github/**`, `Jenkinsfile`, `Dockerfile`, dependency
   manifests, `.gitignore`, `sonar-project.properties`, `.semgrep.yml`, `.trivyignore`, coverage
   configs; **append-only** — under `tests/**`, **added files (status `A`) are allowed but modified,
   deleted, or renamed files (`M`/`D`/`R`) are rejected** (the agent may write new tests to cover its
@@ -1053,7 +1102,9 @@ serves coding + triage), a stdio Jenkins MCP (`hekmon8`/`avisangle`, or the offi
 `jenkinsci/mcp-server-plugin` over HTTP), `grafana/mcp-grafana` (official; triage's log/trace
 input), Playwright MCP (QA), SMTP MCP (notify) — GitHub/Jenkins/Grafana/email in the **control
 plane** (they hold secrets), Playwright in the **workload container**; each behind a tight
-`tool_filter`. Plus deterministic gates: SonarQube CE, Trivy, gitleaks, Semgrep CE, Syft, cosign
+`tool_filter`. The **coding agent embeds `mini-swe-agent`** (MIT, pinned `==2.2.x`) behind a custom
+`ExecServiceEnvironment` adapter (its bash crosses to the workload; its model calls and the PR-opening
+wrapping node stay control-plane). Plus deterministic gates: SonarQube CE, Trivy, gitleaks, Semgrep CE, Syft, cosign
 (local key), Squawk; **Renovate self-hosted** (dependency bot, not an agent); a **Postgres CI/CD
 metrics DB** (`repo_id`-keyed run/deploy/incident/approval records — the DORA-metrics home, written
 by Jenkins+agents, read by the lead via parameterized query tools); **Loki** + a log shipper
@@ -1089,6 +1140,9 @@ advisory, gate on deterministic tool-trajectory success).
 **Avoid (anti-patterns):** an LLM orchestrating the pipeline; a manager↔worker agent hierarchy;
 auto-merging any agent fix; fast-pathing the fix past any gate; routing flaky tests to the coding
 agent; letting the coding agent edit tests/gates/CI-config/deps (the diff allow-list forbids it);
+**letting mini push or hold the GitHub token** (it emits a `git diff`; the control-plane wrapping
+node pushes); **using mini's `DockerEnvironment`** (needs a Docker socket — use the
+`ExecServiceEnvironment`); bounding a mini attempt with `cost_limit` instead of `step_limit`;
 triaging a prod incident *before* rolling back; **letting the team-lead agent orchestrate the
 other agents, originate an approval, or hold deploy authority** (it reads + relays only — Jenkins
 coordinates, the human decides, the gate enforces).
@@ -1176,14 +1230,15 @@ the point.
 | 6.5 | Static graph workflow | Build | when an agent's loop branches beyond itself (e.g. coding agent) | node/edge + Python |
 | 7 | Scale + kill-switch + concurrency model | Scale/Govern | parallel across repos / serialize within a repo / global LLM-capacity cap; Falco brake | YAML + watchdog |
 | 8 | Control surface + console | Build/Govern | operator console: watch, approve, stop, reports | API + app |
-| 9 | **Self-healing CI/CD team** | Build/Govern | **the product: gated pipeline + self-heal loop** (Jenkins, 4 agents incl. team-lead, gitleaks/Semgrep/Trivy/Syft/cosign/Squawk, Renovate, Postgres metrics DB + parameterized query tools, branch protection, diff allow-list, auto-rollback) | Jenkinsfile + SKILL.md + config |
+| 9 | **Self-healing CI/CD team** | Build/Govern | **the product: gated pipeline + self-heal loop** (Jenkins, 4 agents incl. team-lead; coding agent = embedded mini-swe-agent; gitleaks/Semgrep/Trivy/Syft/cosign/Squawk, Renovate, Postgres metrics DB + parameterized query tools, branch protection, diff allow-list, auto-rollback) | Jenkinsfile + SKILL.md + config |
 | 10 | **Self-hosted multi-repo packaging** | Build/Govern | **clone-and-go for any repo** | repos.yml + .agentci.yml |
 
 ## The boxes that stay "code, not config"
 Budget real engineering here, in order of when they bite: **(1) local code sandbox** (Phase 1),
 **(2) LLM-judge eval** (Phase 5, solved by an LM Studio judge), **(3) semantic memory at scale**
-(Phase 2), **(4) anomaly / kill-switch** (Phase 7), **(5) the three skills + Jenkins wiring**
-(Phase 9), **(6) the generic-engine packaging + QA-spec story** (Phase 10). Everything else is
+(Phase 2), **(4) anomaly / kill-switch** (Phase 7), **(5) the four skills + Jenkins wiring, plus the
+coding agent's `ExecServiceEnvironment` adapter + mini-wrapping node (diff extraction → allow-list →
+PR)** (Phase 9), **(6) the generic-engine packaging + QA-spec story** (Phase 10). Everything else is
 native ADK or one-line config.
 
 ## Suggested cadence

@@ -5,12 +5,14 @@ description = "Self-healing CI/CD agent team (local, OSS, Google ADK + LM Studio
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "aiosqlite>=0.22.1",
     # Pin the 2.x line per CLAUDE.md invariant #2 (no 1.x patterns).
-    "google-adk[mcp]~=2.1",
+    "google-adk[db,mcp]~=2.1",
     # LiteLLM shim to LM Studio. Avoid 1.82.7-1.82.8 (security advisory) — HANDOFF §2.
     "litellm>=1.82.9",
     "python-dotenv>=1.0",
     "pyyaml>=6.0.3",
+    "redis>=8.0.0",
 ]
 
 [dependency-groups]

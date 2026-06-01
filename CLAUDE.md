@@ -16,7 +16,9 @@ phases are its substrate.
    ctx.run_node(worker)` — the LoopAgent replacement). **Never use `LoopAgent`/`Sequential`/`Parallel`
    Agent (deprecated in ADK 2.0).** No `sub_agents`/`AgentTool`/`transfer_to_agent`, no Task-API/
    Collaborative layer, no manager agent. Specialization = load a `SKILL.md`. Graduate to a static
-   graph `Workflow` only when phases branch (6.5). (The **team-lead agent** is allowed *only* as a
+   graph `Workflow` only when phases branch (6.5). **One deliberate exception (see #16): the coding
+   agent's inner loop is embedded `mini-swe-agent`, wrapped as a single node — QA, triage, and
+   team-lead stay pure ADK.** (The **team-lead agent** is allowed *only* as a
    read-and-relay **spokesperson** — it reads state + relays the human's approvals; it does NOT
    coordinate the other agents or hold authority. Jenkins coordinates; the human decides. A lead that
    orchestrates or auto-approves = the banned manager.)
@@ -69,10 +71,25 @@ phases are its substrate.
     capacity, not container count**; raise throughput by scaling the model (vLLM/2nd instance via
     the LiteLLM shim), not by adding containers.
 15. **Thinking/reasoning is selective: Triage YES, Coding YES, QA NO, Team-lead NO** (think where
-    judgment lives, not execution/lookup). Use ADK **`PlanReActPlanner`** (model-agnostic);
-    **never `BuiltInPlanner`/`ThinkingConfig`** (Gemini-only, no-ops on LM Studio). If a reasoning
-    model is loaded, instead *suppress* thinking on QA + lead. Bound the reasoning budget. Eval-gate
-    it (Phase-5 sweep) and size the Phase-7 concurrency cap with thinking enabled on triage + coding.
+    judgment lives, not execution/lookup). Use ADK **`PlanReActPlanner`** (model-agnostic) **for the
+    ADK agents (triage)**; **never `BuiltInPlanner`/`ThinkingConfig`** (Gemini-only, no-ops on LM
+    Studio). **Coding's reasoning comes from mini's own prompt-driven loop, NOT `PlanReActPlanner`**
+    (optionally a reasoning model in LM Studio). If a reasoning model is loaded, instead *suppress*
+    thinking on QA + lead. Bound the reasoning budget. Eval-gate it (Phase-5 sweep) and size the
+    Phase-7 concurrency cap with thinking enabled on triage + coding.
+16. **Coding agent = embedded `mini-swe-agent` (MIT, pin `==2.2.x`), the one non-ADK loop.** Its
+    inner generate→edit→test loop is mini's, wrapped as a single ADK node. **The whole custom surface
+    = one `ExecServiceEnvironment`** (mini's `Environment` protocol → exec service → workload). mini's
+    brain + model calls run in the **control plane** (model never enters workload); **only
+    `execute()` (bash) crosses** into the workload. **mini emits a `git diff`, NEVER a push; the
+    GitHub token never enters the workload** — the control-plane wrapping node applies the #9 diff
+    allow-list, then the GitHub MCP opens the PR. Bound a fix attempt with mini's **`step_limit`** (NOT
+    `cost_limit` — local cost ≈ 0); the per-issue **attempt budget (~2)** is separate. Because mini
+    runs **outside ADK, the governance Plugin can't see its calls** — safety is structural (per-command
+    exec-service screening + Squid egress, the diff allow-list, full-pipeline re-entry + human merge,
+    and screening mini's task input for injection before invoking). Capture mini's trajectory JSON →
+    artifacts + OTel span. **Do NOT use mini's `DockerEnvironment`** (wants a Docker socket).
+    Full spec: `mini_swe_agent_integration.md`.
 
 ## Trust-boundary rule of thumb
 Runs model-generated code or untrusted content → **workload container**.
@@ -92,6 +109,9 @@ team (the product)** → 10 multi-repo OSS packaging.
 - PyMuPDF/Marker/Unstructured-`hi_res` are AGPL/GPL — use Docling if parsing.
 - Official GitHub MCP is broad — `tool_filter` per agent is mandatory.
 - Flaky → quarantine (never coding agent). Prod failure → rollback before triage.
+- mini-swe-agent: pin `==2.2.x` (don't track `main`); use `step_limit` not `cost_limit`; never its
+  `DockerEnvironment`; never let it `gh`/`git push` or hold the token; `StrictUndefined` crashes on a
+  missing template var (always supply `{{task}}`).
 
 ## Process
 One milestone at a time. Read the plan section first. Surface invariant tensions; don't work
